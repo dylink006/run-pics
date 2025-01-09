@@ -24,7 +24,9 @@ def index():
 
 @app.route("/about")
 def about():
-    return render_template("/about.html")
+    if current_user.is_authenticated:
+        return render_template("user/about.html", user=current_user)
+    return render_template("/public/about.html")
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
