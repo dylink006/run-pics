@@ -1,4 +1,6 @@
 import folium
+import osmnx as ox
+import networkx as nx
 from math import sin, cos, radians
 
 # Define the coordinates for Gainesville, Florida
@@ -13,18 +15,36 @@ def generate_star_coordinates(lat, lon, size, points=5):
         x = lat + r * cos(angle) * 0.1  # Adjust scale for latitude
         y = lon + r * sin(angle) * 0.1  # Adjust scale for longitude
         coords.append((x, y))
-    coords.append(coords[0])  # Close the star
     return coords
 
-# Generate larger star coordinates
-star_coords = generate_star_coordinates(latitude, longitude, size=0.05)  # Increase size
+# Generate star coordinates
+star_coords = generate_star_coordinates(latitude, longitude, size=0.5)
+
+# Download road network for Gainesville
+G = ox.graph_from_point((latitude, longitude), dist=5000, network_type='drive')
+
+# Snap star points to nearest road nodes
+snapped_points = [ox.nearest_nodes(G, coord[1], coord[0]) for coord in star_coords]
+
+# Generate routes between snapped points
+routes = []
+for i in range(len(snapped_points) - 1):
+    route = nx.shortest_path(G, snapped_points[i], snapped_points[i + 1], weight='length')
+    routes.append(route)
+
+# Combine all routes
+all_routes = []
+for route in routes:
+    all_routes.extend(route)
 
 # Create a map centered on Gainesville
-m = folium.Map(location=[latitude, longitude], zoom_start=12)
+m = folium.Map(location=[latitude, longitude], zoom_start=13)
 
-# Add a red-outlined star
-folium.PolyLine(star_coords, color="red", weight=3).add_to(m)
+# Plot each route on the map
+for route in routes:
+    route_coords = [(G.nodes[node]['y'], G.nodes[node]['x']) for node in route]
+    folium.PolyLine(route_coords, color="red", weight=2.5).add_to(m)
 
-# Save map to an HTML file
-m.save("gainesville_large_star.html")
-print("Map saved as 'gainesville_large_star.html'. Open this file to view the map.")
+# Save the map
+m.save("gainesville_star_route.html")
+print("Map saved as 'gainesville_star_route.html'. Open this file to view the map.")
