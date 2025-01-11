@@ -18,7 +18,7 @@ def generate_star_coordinates(lat, lon, size, points=5):
     return coords
 
 # Generate star coordinates
-star_coords = generate_star_coordinates(latitude, longitude, size=0.5)
+star_coords = generate_star_coordinates(latitude, longitude, size=0.2)
 
 # Download road network for Gainesville
 G = ox.graph_from_point((latitude, longitude), dist=5000, network_type='drive')
@@ -31,6 +31,10 @@ routes = []
 for i in range(len(snapped_points) - 1):
     route = nx.shortest_path(G, snapped_points[i], snapped_points[i + 1], weight='length')
     routes.append(route)
+
+# Close the loop by adding the route from the last point to the first point
+closing_route = nx.shortest_path(G, snapped_points[-1], snapped_points[0], weight='length')
+routes.append(closing_route)
 
 # Combine all routes
 all_routes = []
