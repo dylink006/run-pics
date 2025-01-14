@@ -2,7 +2,6 @@ import osmnx as ox
 import networkx as nx
 import folium
 from math import sin, cos, radians, sqrt
-from shapely.geometry import LineString, Point
 
 
 def generate_star_points(center_lat, center_lon, size=0.02):
@@ -28,79 +27,63 @@ def snap_to_nearest_node(G, lat, lon):
     return ox.nearest_nodes(G, lon, lat)
 
 
-def calculate_closest_point_on_line(point, line):
+def calculate_distance_to_point(point, target):
     """
-    Calculate the closest point on a line to a given point.
+    Calculate the Euclidean distance from a point to a target.
     """
-    point = Point(point[1], point[0])  # Convert to (lon, lat) for Shapely
-    line = LineString([(lon, lat) for lat, lon in line])  # Convert line to Shapely
-    closest_point = line.interpolate(line.project(point))
-    return closest_point.y, closest_point.x  # Convert back to (lat, lon)
+    x1, y1 = point
+    x2, y2 = target
+    return sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
 
 
-def enforce_alignment(G, route, ideal_line, max_deviation=0.002):
+def calculate_distance_to_line(point, line):
     """
-    Enforce alignment with the ideal line by correcting deviations beyond a threshold.
+    Calculate the perpendicular distance from a point to a line segment.
     """
-    corrected_route = []
-    for node in route:
-        node_lat, node_lon = G.nodes[node]["y"], G.nodes[node]["x"]
-        distance_to_line = calculate_distance_to_line((node_lat, node_lon), ideal_line)
-        if distance_to_line > max_deviation:
-            # Correct by snapping back to the closest point on the line
-            closest_lat, closest_lon = calculate_closest_point_on_line((node_lat, node_lon), ideal_line)
-            corrected_node = snap_to_nearest_node(G, closest_lat, closest_lon)
-            corrected_route.append(corrected_node)
-        else:
-            corrected_route.append(node)
-    return corrected_route
+    x0, y0 = point
+    x1, y1 = line[0]
+    x2, y2 = line[1]
+    num = abs((y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1)
+    denom = sqrt((y2 - y1) ** 2 + (x2 - x1) ** 2)
+    return num / denom if denom != 0 else float("inf")
 
 
-def generate_star_route(G, snapped_star_points, max_deviation=0.002):
+def generate_star_route(G, snapped_star_points):
     """
-    Generate the star route by connecting snapped star points and enforcing alignment with the ideal star geometry.
+    Generate the star route by connecting snapped star points using the road network.
     """
     final_route = []
 
     for i in range(len(snapped_star_points)):
         p1 = snapped_star_points[i]
-        p2 = snapped_star_points[(i + 1) % len(snapped_star_points)]  # Wrap around
+        p2 = snapped_star_points[(i + 1) % len(snapped_star_points)]  # Wrap around to form a closed loop
 
         # Snap start and end points to the road network
         start_node = snap_to_nearest_node(G, p1[0], p1[1])
         end_node = snap_to_nearest_node(G, p2[0], p2[1])
 
-        # Define the ideal line segment
-        ideal_line = [p1, p2]
-
-        # Custom cost function: Penalize deviations from the ideal line
+        # Custom cost function: Consider both the current ideal line and the next star point
         def custom_cost(u, v, d):
             road_length = d.get("length", 1)
             point = (G.nodes[v]["y"], G.nodes[v]["x"])
-            deviation_penalty = calculate_distance_to_line(point, ideal_line)
-            return road_length + deviation_penalty * 100
+            # Distance to the ideal line for the current segment
+            deviation_penalty = calculate_distance_to_line(point, [p1, p2])
+            # Distance to the next star point
+            target_penalty = calculate_distance_to_point(point, p2)
+            # Avoid loops by penalizing already visited nodes
+            loop_penalty = 0 if v not in final_route else 1000
+            return road_length + deviation_penalty * 300 + target_penalty * 50 + loop_penalty
 
-        # Compute the shortest path
+        # Compute shortest path using custom cost
         try:
             path = nx.shortest_path(G, start_node, end_node, weight=custom_cost)
-            # Enforce alignment with the ideal line
-            corrected_path = enforce_alignment(G, path, ideal_line, max_deviation)
-            final_route.extend(corrected_path)
+            final_route.extend(path)
         except nx.NetworkXNoPath:
             print(f"No path between nodes {start_node} and {end_node}")
             final_route.append(start_node)
             final_route.append(end_node)
 
     return final_route
-
-
-def calculate_distance_to_line(point, line):
-    """
-    Calculate the perpendicular distance from a point to a line.
-    """
-    point = Point(point[1], point[0])  # Convert to (lon, lat) for Shapely
-    line = LineString([(lon, lat) for lat, lon in line])  # Convert line to Shapely
-    return point.distance(line)
 
 
 def plot_route(G, route_nodes, snapped_star_points, out_file="star_route_map.html"):
@@ -141,7 +124,7 @@ def build_and_run_star(city="San Francisco, California"):
     # Generate star points
     star_points = generate_star_points(center_lat, center_lon, size=0.02)
 
-    # Snap star points to road network (retrieve lat/lon of snapped nodes)
+    # Snap star points to road network
     snapped_star_points = []
     for lat, lon in star_points:
         snapped_node = snap_to_nearest_node(G, lat, lon)
@@ -153,7 +136,6 @@ def build_and_run_star(city="San Francisco, California"):
 
     # Plot and save the map
     plot_route(G, route_nodes, snapped_star_points, "star_route_map.html")
-
 
 
 # Run the script
