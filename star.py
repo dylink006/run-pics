@@ -45,8 +45,9 @@ def generate_star_route(G, snapped_star_points):
             road_length = d.get("length", 1)
             point = (G.nodes[v]["y"], G.nodes[v]["x"])
             deviation_penalty = calculate_distance_to_line(point, [p1, p2]) ** 2  # Squared penalty
+            excessive_deviation_penalty = 5000 if calculate_distance_to_line(point, [p1, p2]) > 0.01 else 0
             loop_penalty = 0 if v not in final_route else 1000
-            return road_length + deviation_penalty * 1000 + loop_penalty
+            return road_length + deviation_penalty * 1000 + excessive_deviation_penalty + loop_penalty
 
         try:
             path = nx.shortest_path(G, start_node, end_node, weight=custom_cost)
@@ -56,9 +57,10 @@ def generate_star_route(G, snapped_star_points):
 
     return final_route
 
-# Improved average deviation calculation
-def calculate_average_deviation(G, route_nodes, ideal_star_segments):
+# Improved average and maximum deviation calculation
+def calculate_deviations(G, route_nodes, ideal_star_segments):
     total_deviation = 0
+    max_deviation = 0
     count = 0
     for i in range(len(route_nodes) - 1):
         start_node = route_nodes[i]
@@ -66,16 +68,17 @@ def calculate_average_deviation(G, route_nodes, ideal_star_segments):
         segment_start = (G.nodes[start_node]["y"], G.nodes[start_node]["x"])
         segment_end = (G.nodes[end_node]["y"], G.nodes[end_node]["x"])
 
-        max_deviation = 0
         for ideal_segment in ideal_star_segments:
             deviation_start = calculate_distance_to_line(segment_start, ideal_segment)
             deviation_end = calculate_distance_to_line(segment_end, ideal_segment)
-            max_deviation = max(max_deviation, deviation_start, deviation_end)
+            segment_deviation = max(deviation_start, deviation_end)
 
-        total_deviation += max_deviation
-        count += 1
+            total_deviation += segment_deviation
+            max_deviation = max(max_deviation, segment_deviation)
+            count += 1
 
-    return total_deviation / count if count > 0 else float("inf")
+    avg_deviation = total_deviation / count if count > 0 else float("inf")
+    return avg_deviation, max_deviation
 
 # Plot route on a map
 def plot_route(G, route_nodes, snapped_star_points, out_file="star_route_map.html"):
@@ -127,24 +130,26 @@ def build_and_run_star_matrix(city="San Francisco, California"):
                 route_nodes = generate_star_route(G, snapped_star_points)
                 ideal_star_segments = [(star_points[i], star_points[(i + 1) % len(star_points)])
                                        for i in range(len(star_points))]
-                avg_deviation = calculate_average_deviation(G, route_nodes, ideal_star_segments)
+                avg_deviation, max_deviation = calculate_deviations(G, route_nodes, ideal_star_segments)
                 results.append({
                     "north_offset": north_offset,
                     "east_offset": east_offset,
                     "size": size,
-                    "average_deviation": avg_deviation
+                    "average_deviation": avg_deviation,
+                    "max_deviation": max_deviation
                 })
 
                 if len(latitude_offsets) == 1 and len(longitude_offsets) == 1 and len(sizes) == 1:
                     out_file = f"star_route_{north_offset}_{east_offset}_size_{size}.html"
                     plot_route(G, route_nodes, snapped_star_points, out_file=out_file)
 
-    results = sorted(results, key=lambda x: x["average_deviation"])
+    results = sorted(results, key=lambda x: (x["average_deviation"], x["max_deviation"]))
     print("Ranking of star routes by adherence to the ideal star shape:")
     for rank, result in enumerate(results, 1):
         print(f"Rank {rank}: north_offset={result['north_offset']}, "
               f"east_offset={result['east_offset']}, size={result['size']}, "
-              f"average_deviation={result['average_deviation']}")
+              f"average_deviation={result['average_deviation']}, "
+              f"max_deviation={result['max_deviation']}")
     return results
 
 if __name__ == "__main__":
