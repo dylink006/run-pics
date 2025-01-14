@@ -97,9 +97,9 @@ def plot_route(G, route_nodes, snapped_star_points, out_file="star_route_map.htm
 
 # Main routine to evaluate configurations
 def build_and_run_star_matrix(city="San Francisco, California"):
-    latitude_offsets = [0.02]
-    longitude_offsets = [0.01]
-    sizes = [0.01]
+    latitude_offsets = [0]
+    longitude_offsets = [0]
+    sizes = [0.02]
     results = []
     threshold = 0.002
 
