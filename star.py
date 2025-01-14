@@ -32,7 +32,7 @@ def calculate_distance_to_line(point, line):
     denom = sqrt((y2 - y1) ** 2 + (x2 - x1) ** 2)
     return num / denom if denom != 0 else float("inf")
 
-# Improved route generation to stick closer to the ideal shape
+# Improved route generation to prioritize adherence to the star shape
 def generate_star_route(G, snapped_star_points):
     final_route = []
     for i in range(len(snapped_star_points)):
@@ -44,24 +44,21 @@ def generate_star_route(G, snapped_star_points):
         def custom_cost(u, v, d):
             road_length = d.get("length", 1)
             point = (G.nodes[v]["y"], G.nodes[v]["x"])
-            deviation_penalty = calculate_distance_to_line(point, [p1, p2]) ** 2  # Squared penalty
-            excessive_deviation_penalty = 5000 if calculate_distance_to_line(point, [p1, p2]) > 0.01 else 0
-            loop_penalty = 0 if v not in final_route else 1000
-            return road_length + deviation_penalty * 1000 + excessive_deviation_penalty + loop_penalty
+            deviation_penalty = calculate_distance_to_line(point, [p1, p2])  # Prioritize smaller deviations
+            return road_length + deviation_penalty * 1000
 
         try:
             path = nx.shortest_path(G, start_node, end_node, weight=custom_cost)
             final_route.extend(path)
         except nx.NetworkXNoPath:
             print(f"No path between nodes {start_node} and {end_node}")
+            return []  # Abort the route if any segment cannot be completed
 
     return final_route
 
-# Improved average and maximum deviation calculation
-def calculate_deviations(G, route_nodes, ideal_star_segments):
+# Calculate total deviation adjusted for star size
+def calculate_total_deviation_adjusted(G, route_nodes, ideal_star_segments, size):
     total_deviation = 0
-    max_deviation = 0
-    count = 0
     for i in range(len(route_nodes) - 1):
         start_node = route_nodes[i]
         end_node = route_nodes[i + 1]
@@ -71,14 +68,11 @@ def calculate_deviations(G, route_nodes, ideal_star_segments):
         for ideal_segment in ideal_star_segments:
             deviation_start = calculate_distance_to_line(segment_start, ideal_segment)
             deviation_end = calculate_distance_to_line(segment_end, ideal_segment)
-            segment_deviation = max(deviation_start, deviation_end)
+            total_deviation += (deviation_start + deviation_end) / 2
 
-            total_deviation += segment_deviation
-            max_deviation = max(max_deviation, segment_deviation)
-            count += 1
-
-    avg_deviation = total_deviation / count if count > 0 else float("inf")
-    return avg_deviation, max_deviation
+    # Adjust total deviation based on size
+    size_factor = 1 / size
+    return total_deviation * size_factor
 
 # Plot route on a map
 def plot_route(G, route_nodes, snapped_star_points, out_file="star_route_map.html"):
@@ -97,11 +91,10 @@ def plot_route(G, route_nodes, snapped_star_points, out_file="star_route_map.htm
 
 # Main routine to evaluate configurations
 def build_and_run_star_matrix(city="San Francisco, California"):
-    latitude_offsets = [0]
-    longitude_offsets = [0]
-    sizes = [0.02]
+    latitude_offsets = [-0.02]
+    longitude_offsets = [-0.02]
+    sizes = [0.01]
     results = []
-    threshold = 0.002
 
     for north_offset in latitude_offsets:
         for east_offset in longitude_offsets:
@@ -128,28 +121,30 @@ def build_and_run_star_matrix(city="San Francisco, California"):
                     continue
 
                 route_nodes = generate_star_route(G, snapped_star_points)
+                if not route_nodes:  # Skip if the route is not continuous
+                    continue
+
                 ideal_star_segments = [(star_points[i], star_points[(i + 1) % len(star_points)])
                                        for i in range(len(star_points))]
-                avg_deviation, max_deviation = calculate_deviations(G, route_nodes, ideal_star_segments)
+                total_deviation_adjusted = calculate_total_deviation_adjusted(G, route_nodes, ideal_star_segments, size)
+
                 results.append({
                     "north_offset": north_offset,
                     "east_offset": east_offset,
                     "size": size,
-                    "average_deviation": avg_deviation,
-                    "max_deviation": max_deviation
+                    "adjusted_total_deviation": total_deviation_adjusted
                 })
 
                 if len(latitude_offsets) == 1 and len(longitude_offsets) == 1 and len(sizes) == 1:
                     out_file = f"star_route_{north_offset}_{east_offset}_size_{size}.html"
                     plot_route(G, route_nodes, snapped_star_points, out_file=out_file)
 
-    results = sorted(results, key=lambda x: (x["average_deviation"], x["max_deviation"]))
+    results = sorted(results, key=lambda x: x["adjusted_total_deviation"])
     print("Ranking of star routes by adherence to the ideal star shape:")
     for rank, result in enumerate(results, 1):
         print(f"Rank {rank}: north_offset={result['north_offset']}, "
               f"east_offset={result['east_offset']}, size={result['size']}, "
-              f"average_deviation={result['average_deviation']}, "
-              f"max_deviation={result['max_deviation']}")
+              f"adjusted_total_deviation={result['adjusted_total_deviation']}")
     return results
 
 if __name__ == "__main__":
