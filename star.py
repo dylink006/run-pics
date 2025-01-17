@@ -66,19 +66,25 @@ def generate_star_route(G, snapped_star_points):
             previous_point = (G.nodes[u]["y"], G.nodes[u]["x"])
 
             # Calculate the deviation from the ideal line segment
-            deviation_penalty = calculate_distance_to_line(point, [p1, p2]) ** 2 * 5000
+            deviation_penalty = calculate_distance_to_line(point, [p1, p2]) ** 2 * 10000
 
             # Add strong penalty for deviations that lead to the star's interior
-            interior_penalty = 20000 if point_in_star_interior(point, snapped_star_points) else 0
+            interior_penalty = 50000 if point_in_star_interior(point, snapped_star_points) else 0
 
             # Encourage direct movement toward the next star point
-            direction_penalty = sqrt((p2[0] - point[0]) ** 2 + (p2[1] - point[1]) ** 2) * 1000
+            direction_penalty = sqrt((p2[0] - point[0]) ** 2 + (p2[1] - point[1]) ** 2) * 2000
 
             # Penalize redundant movements and zig-zags
-            zig_zag_penalty = calculate_distance_to_line(previous_point, [p1, p2]) * 2000
+            zig_zag_penalty = calculate_distance_to_line(previous_point, [p1, p2]) * 3000
+
+            # Add penalty for returning to the same node or close loops
+            loop_penalty = 50000 if u == v else 0
+
+            # Add a penalty for excursions that deviate and return to the same segment
+            excursion_penalty = 25000 if calculate_distance_to_line(point, [p1, p2]) > 0.002 else 0
 
             # Overall cost combining length and penalties
-            cost = road_length + deviation_penalty + interior_penalty + direction_penalty + zig_zag_penalty
+            cost = road_length + deviation_penalty + interior_penalty + direction_penalty + zig_zag_penalty + loop_penalty + excursion_penalty
 
             return cost
 
@@ -148,9 +154,9 @@ def plot_route(G, route_nodes, snapped_star_points, out_file="star_route_map.htm
 
 # Main routine to evaluate configurations
 def build_and_run_star_matrix(city="San Francisco, California"):
-    latitude_offsets = [0]
-    longitude_offsets = [0]
-    sizes = [0.02]  # Different star sizes to test
+    latitude_offsets = [0.01]
+    longitude_offsets = [-0.01]
+    sizes = [0.01]  # Different star sizes to test
     results = []
 
     for north_offset in latitude_offsets:
