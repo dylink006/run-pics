@@ -52,6 +52,7 @@ def point_in_star_interior(point, star_points):
 # Improved route generation to prioritize adherence to the star shape
 def generate_star_route(G, snapped_star_points):
     final_route = []
+    visited_nodes = set()
 
     for i in range(len(snapped_star_points)):
         p1 = snapped_star_points[i]
@@ -60,51 +61,59 @@ def generate_star_route(G, snapped_star_points):
         start_node = snap_to_nearest_node(G, p1[0], p1[1])
         end_node = snap_to_nearest_node(G, p2[0], p2[1])
 
+        if not nx.has_path(G, start_node, end_node):
+            continue
+
         def custom_cost(u, v, d):
             road_length = d.get("length", 1)
             point = (G.nodes[v]["y"], G.nodes[v]["x"])
             previous_point = (G.nodes[u]["y"], G.nodes[u]["x"])
 
-            # Calculate the deviation from the ideal line segment
-            deviation_penalty = calculate_distance_to_line(point, [p1, p2]) ** 2 * 10000
+            deviation_penalty = calculate_distance_to_line(point, [p1, p2]) ** 2 * 30000
+            interior_penalty = 300000 if point_in_star_interior(point, snapped_star_points) else 0
+            direction_penalty = sqrt((p2[0] - point[0]) ** 2 + (p2[1] - point[1]) ** 2) * 5000
+            zig_zag_penalty = calculate_distance_to_line(previous_point, [p1, p2]) * 7000
+            loop_penalty = 60000 if v in visited_nodes else 0
+            excursion_penalty = 80000 if calculate_distance_to_line(point, [p1, p2]) > 0.003 else 0
+            geometry_penalty = 0
 
-            # Add strong penalty for deviations that lead to the star's interior
-            interior_penalty = 50000 if point_in_star_interior(point, snapped_star_points) else 0
-
-            # Encourage direct movement toward the next star point
-            direction_penalty = sqrt((p2[0] - point[0]) ** 2 + (p2[1] - point[1]) ** 2) * 2000
-
-            # Penalize redundant movements and zig-zags
-            zig_zag_penalty = calculate_distance_to_line(previous_point, [p1, p2]) * 3000
-
-            # Add penalty for returning to the same node or close loops
-            loop_penalty = 50000 if u == v else 0
-
-            # Add a penalty for excursions that deviate and return to the same segment
-            excursion_penalty = 25000 if calculate_distance_to_line(point, [p1, p2]) > 0.002 else 0
-
-            # Overall cost combining length and penalties
-            cost = road_length + deviation_penalty + interior_penalty + direction_penalty + zig_zag_penalty + loop_penalty + excursion_penalty
+            cost = (road_length + deviation_penalty + interior_penalty +
+                    direction_penalty + zig_zag_penalty + loop_penalty +
+                    excursion_penalty + geometry_penalty)
 
             return cost
 
         try:
             path = nx.shortest_path(G, start_node, end_node, weight=custom_cost)
-            final_route.extend(path)
+            valid_path = True
+            for j in range(len(path) - 1):
+                if not G.has_edge(path[j], path[j + 1]):
+                    valid_path = False
+                    break
+
+            if valid_path:
+                for node in path:
+                    if node in visited_nodes:
+                        continue
+                    visited_nodes.add(node)
+                final_route.extend(path)
+
         except nx.NetworkXNoPath:
-            print(f"No path between nodes {start_node} and {end_node}")
-            return []  # Abort if any segment fails
+            return []
 
     return final_route
 
-
-
-# Calculate total deviation adjusted for star size and interior penalties
 def calculate_total_deviation_adjusted(G, route_nodes, ideal_star_segments, size, star_points):
     total_deviation = 0
     interior_penalty = 0
-    continuity_penalty = 0
     route_distance = 0
+    loop_penalty = 0
+    symmetry_reward = 0
+    compactness_penalty = 0
+    angle_penalty = 0
+    hairiness_penalty = 0
+
+    # Calculate ideal distance for normalization
     ideal_distance = sum(
         sqrt((seg[1][0] - seg[0][0]) ** 2 + (seg[1][1] - seg[0][1]) ** 2) for seg in ideal_star_segments
     )
@@ -114,26 +123,82 @@ def calculate_total_deviation_adjusted(G, route_nodes, ideal_star_segments, size
         end_node = route_nodes[i + 1]
         segment_start = (G.nodes[start_node]["y"], G.nodes[start_node]["x"])
         segment_end = (G.nodes[end_node]["y"], G.nodes[end_node]["x"])
+
+        # Calculate route distance
         route_distance += sqrt((segment_end[0] - segment_start[0]) ** 2 + (segment_end[1] - segment_start[1]) ** 2)
 
+        # Calculate deviation from ideal segments
         for ideal_segment in ideal_star_segments:
             deviation_start = calculate_distance_to_line(segment_start, ideal_segment)
             deviation_end = calculate_distance_to_line(segment_end, ideal_segment)
             total_deviation += (deviation_start + deviation_end) / 2
 
+        # Penalize points inside the star interior
         if point_in_star_interior(segment_start, star_points) or point_in_star_interior(segment_end, star_points):
-            interior_penalty += 1
+            interior_penalty += 50000  # Adjusted penalty for visual consistency
 
-    continuity_penalty = len(route_nodes) / len(ideal_star_segments) * 500
-    size_factor = 1 / size
-    distance_penalty = abs(route_distance - ideal_distance) * 500
-    hairs_penalty = detect_hairs(route_nodes) * 1000
+        # Penalize loops (repeated nodes)
+        if i > 0 and route_nodes[i - 1] == route_nodes[i + 1]:
+            loop_penalty += 20000  # Adjusted penalty for loops
 
-    return (total_deviation * size_factor +
-            interior_penalty * 2000 +
-            distance_penalty +
-            continuity_penalty +
-            hairs_penalty)
+    # Reward symmetry by checking uniformity of segment lengths and angles
+    segment_lengths = [
+        sqrt((seg[1][0] - seg[0][0]) ** 2 + (seg[1][1] - seg[0][1]) ** 2) for seg in ideal_star_segments
+    ]
+    avg_length = sum(segment_lengths) / len(segment_lengths)
+    symmetry_reward += -sum(abs(length - avg_length) for length in segment_lengths) * 8000  # Boosted symmetry weight
+
+    # Penalize angles that deviate significantly from expected star angles (36° increments)
+    for i in range(len(ideal_star_segments)):
+        p1 = ideal_star_segments[i][0]
+        p2 = ideal_star_segments[i][1]
+        p3 = ideal_star_segments[(i + 1) % len(ideal_star_segments)][1]
+
+        angle = abs(
+            (p2[0] - p1[0]) * (p3[0] - p2[0]) + (p2[1] - p1[1]) * (p3[1] - p2[1])
+        ) / (
+            sqrt((p2[0] - p1[0]) ** 2 + (p2[1] - p1[1]) ** 2) * sqrt((p3[0] - p2[0]) ** 2 + (p3[1] - p2[1]) ** 2)
+        )
+        angle_penalty += (1 - angle) * 20000  # Reduced penalty weight
+
+    # Compactness penalty to ensure the route doesn't stray too far from the star's size
+    compactness_penalty += sum(
+        sqrt((seg[1][0] - seg[0][0]) ** 2 + (seg[1][1] - seg[0][1]) ** 2) for seg in ideal_star_segments
+    ) * 1500  # Boosted compactness weight
+
+    # Penalize "hairiness" (unnecessary jaggedness or extra excursions)
+    for i in range(len(route_nodes) - 3):
+        if route_nodes[i] == route_nodes[i + 3]:
+            hairiness_penalty += 70000  # Increased penalty for zig-zagging
+
+    # Distance penalty based on deviation from the ideal route distance
+    distance_penalty = abs(route_distance - ideal_distance) * 300  # Adjusted distance penalty
+
+    # Normalize total deviation by ideal distance to avoid size bias
+    normalized_total_deviation = (total_deviation / ideal_distance) * 1000  # Adjusted weight for total deviation
+
+    # Adjusted score calculation
+    score = (
+        normalized_total_deviation +
+        interior_penalty +
+        loop_penalty +
+        compactness_penalty +
+        distance_penalty +
+        symmetry_reward +  # Reward symmetry, higher reward for better symmetry
+        angle_penalty +  # Penalize significant angle deviations
+        hairiness_penalty  # Penalize jaggedness or extra excursions
+    )
+
+    # Debugging insights
+    print(f"Score breakdown: Total Deviation={normalized_total_deviation}, Interior Penalty={interior_penalty}, ",
+          f"Loop Penalty={loop_penalty}, Compactness Penalty={compactness_penalty}, Distance Penalty={distance_penalty}, ",
+          f"Symmetry Reward={symmetry_reward}, Angle Penalty={angle_penalty}, Hairiness Penalty={hairiness_penalty}")
+
+    return score
+
+
+
+
 
 # Plot route on a map
 def plot_route(G, route_nodes, snapped_star_points, out_file="star_route_map.html"):
@@ -155,8 +220,8 @@ def plot_route(G, route_nodes, snapped_star_points, out_file="star_route_map.htm
 # Main routine to evaluate configurations
 def build_and_run_star_matrix(city="San Francisco, California"):
     latitude_offsets = [0.01]
-    longitude_offsets = [-0.01]
-    sizes = [0.01]  # Different star sizes to test
+    longitude_offsets = [0.01]
+    sizes = [0.02]  # Different star sizes to test
     results = []
 
     for north_offset in latitude_offsets:
@@ -212,9 +277,9 @@ def build_and_run_star_matrix(city="San Francisco, California"):
     print("Ranking of star routes by adherence to the ideal star shape:")
     for rank, result in enumerate(results, 1):
         print(f"Rank {rank}: north_offset={result['north_offset']}, "
-              f"east_offset={result['east_offset']}, size={result['size']}, "
-              f"adjusted_total_deviation={result['adjusted_total_deviation']}")
+            f"east_offset={result['east_offset']}, size={result['size']}, "
+            f"adjusted_total_deviation={result['adjusted_total_deviation']}")
     return results
 
 if __name__ == "__main__":
-    results = build_and_run_star_matrix("San Francisco, California")
+    results = build_and_run_star_matrix("Gainesville, Florida")
