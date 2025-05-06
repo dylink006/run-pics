@@ -1,11 +1,13 @@
 from app import app, db, login_manager
-from flask import render_template, redirect, url_for, flash, request
+from flask import render_template, redirect, url_for, flash, request, Response, abort
 from flask_login import UserMixin, login_user, login_required, logout_user, current_user
 from werkzeug.security import generate_password_hash, check_password_hash
 import os
+import sqlite3
 
-if not os.path.exists('app/instance/app.db'):
-    open('app/instance/app.db', 'w').close()
+auth_db_path = 'app/instance/app.db'
+if not os.path.exists(auth_db_path):
+    open(auth_db_path, 'w').close()
 
 class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -18,15 +20,43 @@ def load_user(user_id):
 
 @app.route("/")
 def index():
+    routes_db_path = os.path.join(app.static_folder, 'routes.db')
+    conn = sqlite3.connect(routes_db_path)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT id, name, distance_km FROM routes ORDER BY name")
+    rows = cur.fetchall()
+    conn.close()
+
+    # Build list of route dicts for template
+    routes = []
+    for row in rows:
+        routes.append({
+            'id': row['id'],
+            'name': row['name'].replace('_', ' ').title(),
+            'distance_km': row['distance_km'],
+            'image_name': f"{row['name']}.png",
+            'gpx_url': url_for('get_gpx', route_id=row['id'])
+        })
+
     if current_user.is_authenticated:
-        return render_template("/user/home.html", user=current_user)
-    return render_template("/public/home.html")
+        return render_template('user/home.html', user=current_user, routes=routes)
+    return render_template('public/home.html', routes=routes)
 
 @app.route("/about")
 def about():
+    all_routes = Route.query.order_by(Route.name).all()
+    routes_data = []
+    for r in all_routes:
+        routes_data.append({
+            'id': r.id,
+            'name': r.name.replace('_', ' ').title(),
+            'distance_km': r.distance_km,
+            'image_name': f"{r.name}.png"
+        })
     if current_user.is_authenticated:
-        return render_template("user/about.html", user=current_user)
-    return render_template("/public/about.html")
+        return render_template("user/home.html", user=current_user, routes=routes_data)
+    return render_template("public/home.html", routes=routes_data)
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():
@@ -69,6 +99,23 @@ def logout():
     logout_user()
     flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
+
+@app.route("/gpx/<int:route_id>")
+def get_gpx(route_id):
+    # connect to the same DB where you stored the blobs
+    routes_db_path = os.path.join(app.static_folder, 'routes.db')
+    conn = sqlite3.connect(routes_db_path)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute("SELECT gpx_data FROM routes WHERE id = ?", (route_id,))
+    row = cur.fetchone()
+    conn.close()
+
+    if row is None:
+        abort(404)
+
+    # row['gpx_data'] is a bytes BLOB
+    return Response(row['gpx_data'], mimetype='application/gpx+xml')
 
 with app.app_context():
     db.create_all()

@@ -1,15 +1,54 @@
-{% extends "/public/templates/base-public.html" %}
+{% extends "public/templates/base-public.html" %}
 
-{% block title %}Home{% endblock %}
+{% block main %}
+  <!-- Leaflet CSS -->
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet/dist/leaflet.css"
+  />
 
-{% block main%}
-
-<div class="container">
+  <section class="container py-5">
     <div class="row">
-        <div class="col">
-            <h1>Welcome to the Public Home Page</h1>
-        </div>
-    </div>
-</div>
+      {% for route in routes %}
+        <div class="col-sm-6 col-md-4 col-lg-3 mb-4">
+          <div class="card h-100 shadow-sm">
+            <!-- Mini-map container -->
+            <div
+              id="map-{{ route.id }}"
+              class="route-map"
+              style="height: 200px;"
+              data-gpx="{{ route.gpx_url }}"
+            ></div>
 
+            <div class="card-body">
+              <h5 class="card-title">{{ route.name }}</h5>
+              <p class="card-text">Distance: {{ route.distance_km }} km</p>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <!-- Leaflet JS + GPX plugin -->
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/gpx.min.js"></script>
+  <script>
+    document.addEventListener("DOMContentLoaded", function() {
+      document.querySelectorAll('.route-map').forEach(function(el) {
+        // initialize map
+        const map = L.map(el.id).setView([0, 0], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+          attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        // load GPX and zoom to bounds
+        new L.GPX(el.dataset.gpx, { async: true })
+          .on('loaded', function(e) {
+            map.fitBounds(e.target.getBounds());
+          })
+          .addTo(map);
+      });
+    });
+  </script>
 {% endblock %}
