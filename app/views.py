@@ -24,7 +24,7 @@ def index():
     conn = sqlite3.connect(routes_db_path)
     conn.row_factory = sqlite3.Row
     cur = conn.cursor()
-    cur.execute("SELECT id, name, distance_km FROM routes ORDER BY name")
+    cur.execute("SELECT id, name, distance_km, shape, color FROM routes ORDER BY id")
     rows = cur.fetchall()
     conn.close()
 
@@ -36,7 +36,9 @@ def index():
             'name': row['name'].replace('_', ' ').title(),
             'distance_km': row['distance_km'],
             'image_name': f"{row['name']}.png",
-            'gpx_url': url_for('get_gpx', route_id=row['id'])
+            'gpx_url': url_for('get_gpx', route_id=row['id']),
+            'shape': row['shape'],
+            'color': row['color']
         })
 
     if current_user.is_authenticated:
@@ -45,18 +47,9 @@ def index():
 
 @app.route("/about")
 def about():
-    all_routes = Route.query.order_by(Route.name).all()
-    routes_data = []
-    for r in all_routes:
-        routes_data.append({
-            'id': r.id,
-            'name': r.name.replace('_', ' ').title(),
-            'distance_km': r.distance_km,
-            'image_name': f"{r.name}.png"
-        })
     if current_user.is_authenticated:
-        return render_template("user/home.html", user=current_user, routes=routes_data)
-    return render_template("public/home.html", routes=routes_data)
+        return render_template("user/about.html", user=current_user)
+    return render_template("public/about.html")
 
 @app.route("/signup", methods=["GET", "POST"])
 def signup():

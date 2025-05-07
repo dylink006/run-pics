@@ -18,11 +18,13 @@
               class="route-map"
               style="height: 200px;"
               data-gpx="{{ route.gpx_url }}"
+              data-color="{{ route.color }}"
             ></div>
 
             <div class="card-body">
               <h5 class="card-title">{{ route.name }}</h5>
               <p class="card-text">Distance: {{ route.distance_km }} km</p>
+              <p class="card-text">Shape: {{ route.shape }}</p>
             </div>
           </div>
         </div>
@@ -38,12 +40,23 @@
       document.querySelectorAll('.route-map').forEach(function(el) {
         // initialize map
         const map = L.map(el.id).setView([0, 0], 13);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-          attribution: '&copy; OpenStreetMap contributors'
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
+        'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles © Esri &mdash; Source: USGS, NASA, etc.',
+        maxZoom: 18
         }).addTo(map);
 
+        const color = el.dataset.color;
+
         // load GPX and zoom to bounds
-        new L.GPX(el.dataset.gpx, { async: true })
+        new L.GPX(el.dataset.gpx, { 
+            async: true,
+            polyline_options: {
+                color: color,
+                weight: 4,
+                opacity: 0.9
+            }
+          })
           .on('loaded', function(e) {
             map.fitBounds(e.target.getBounds());
           })
