@@ -36,32 +36,20 @@
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet-gpx/1.7.0/gpx.min.js"></script>
   <script>
-    document.addEventListener("DOMContentLoaded", function() {
-      document.querySelectorAll('.route-map').forEach(function(el) {
-        // initialize map
-        const map = L.map(el.id).setView([0, 0], 13);
-        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
-        'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-        attribution: 'Tiles © Esri &mdash; Source: USGS, NASA, etc.',
-        maxZoom: 18
-        }).addTo(map);
-
-        const color = el.dataset.color;
-
-        // load GPX and zoom to bounds
-        new L.GPX(el.dataset.gpx, { 
-            async: true,
-            polyline_options: {
-                color: color,
-                weight: 4,
-                opacity: 0.9
-            }
-          })
-          .on('loaded', function(e) {
-            map.fitBounds(e.target.getBounds());
-          })
+    document.addEventListener("DOMContentLoaded",function(){
+      const startSvg='<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12"><circle cx="6" cy="6" r="5" fill="%2300c853" stroke="%23fff" stroke-width="1"/></svg>';
+      const endSvg='<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><defs><pattern id="p" width="4" height="4" patternUnits="userSpaceOnUse"><rect width="4" height="4" fill="white"/><rect width="2" height="2" fill="black"/><rect x="2" y="2" width="2" height="2" fill="black"/></pattern></defs><circle cx="8" cy="8" r="7" fill="url(%23p)" stroke="%23fff" stroke-width="1"/></svg>';
+      function svgUrl(svg){return 'data:image/svg+xml;utf8,'+svg;}
+      const startIcon=L.icon({iconUrl:svgUrl(startSvg),iconSize:[12,12],iconAnchor:[6,6],popupAnchor:[0,-6]});
+      const endIcon=L.icon({iconUrl:svgUrl(endSvg),iconSize:[16,16],iconAnchor:[8,8],popupAnchor:[0,-8]});
+      document.querySelectorAll('.route-map').forEach(el=>{
+        const map=L.map(el.id).setView([0,0],13);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',{attribution:'&copy; OpenStreetMap contributors &copy; CARTO',maxZoom:19}).addTo(map);
+        new L.GPX(el.dataset.gpx,{async:true,polyline_options:{color:el.dataset.color,weight:4,opacity:0.9},marker_options:{startIcon:startIcon,endIcon:endIcon,shadowUrl:''}})
+          .on('loaded',e=>{if(e.target._finish)e.target._finish.setZIndexOffset(1000);map.fitBounds(e.target.getBounds());})
           .addTo(map);
       });
     });
-  </script>
+    </script>
+      
 {% endblock %}

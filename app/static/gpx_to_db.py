@@ -51,7 +51,7 @@ def parse_gpx_metadata(file_path):
         color = 'red'
     elif 'star' in lower:
         shape = 'star'
-        color = 'yellow'
+        color = '#fcec08'
     else:
         shape = 'unknown'
         color = 'blue'

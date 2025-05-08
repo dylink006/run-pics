@@ -6,10 +6,12 @@ from global_land_mask import globe
 from scipy.spatial.distance import directed_hausdorff
 import time
 import math
-from shapely.geometry import Polygon
+from shapely.geometry import Polygon, LineString
+from shapely.errors import TopologicalError
 from shapely.affinity import scale
 import gpxpy
 import gpxpy.gpx
+import numpy as np
 
 # Generate heart points based on the size and center coordinates
 def generate_heart_points(center_lat, center_lon, size=0.02):
@@ -280,155 +282,74 @@ def save_route_gpx(G, route_nodes, out_file):
     print(f"GPX saved to {out_file}")
 
 # Improved scoring system with stricter criteria for heart shape
-def calculate_heart_score(G, route_nodes, ideal_heart_segments, heart_points, snapped_heart_points, size):
+def calculate_heart_score(G, route_nodes, heart_template_coords, size):
     if not route_nodes or len(route_nodes) < 3:
         return 0  # Invalid route gets zero score
-    
-    # Extract coordinates of the route
-    route_coords_lon_lat = []
+
+    # Extract route coordinates
+    route_coords = []
     for node in route_nodes:
         try:
-            # OSMnx usually stores lon as 'x', lat as 'y'
-            route_coords_lon_lat.append((G.nodes[node]["x"], G.nodes[node]["y"]))
+            route_coords.append((G.nodes[node]["x"], G.nodes[node]["y"]))
         except KeyError:
-            print(f"Warning: Node {node} missing coordinate data. Skipping.")
-            return 0 # Cannot score if coordinate is missing
-    
-    # 1. Shape similarity (0-30 points) - Based on distance to ideal segments
-    shape_deviation = 0
-    for lon, lat in route_coords_lon_lat:
-        point = (lon, lat) # Use (lon, lat) for distance calc if needed
-        min_deviation = float('inf')
-        for seg in ideal_heart_segments:
-            # Assuming calculate_distance_to_line expects ((lat1, lon1), (lat2, lon2))
-            # Need to ensure segment format matches function expectation.
-            # If calculate_distance_to_line expects (x,y), adapt point and seg accordingly.
-            # Let's assume calculate_distance_to_line is robust or uses lat, lon:
-            point_lat_lon = (lat, lon)
-            seg_lat_lon = [(p[0], p[1]) for p in seg] # Ensure seg points are (lat, lon)
-            try:
-                deviation = calculate_distance_to_line(point_lat_lon, seg_lat_lon)
-                min_deviation = min(min_deviation, deviation)
-            except Exception as e:
-                 print(f"Warning: Error in calculate_distance_to_line: {e}. Using large deviation.")
-                 min_deviation = max(min_deviation, size * 5) # Penalize if calc fails
+            print(f"Missing coordinate for node {node}")
+            return 0
 
-
-        shape_deviation += min_deviation
-
-    avg_deviation = shape_deviation / len(route_coords_lon_lat) / size if len(route_coords_lon_lat) > 0 else 1
-    # Less harsh exponential decay, adjusted weight
-    shape_score = 30 * math.exp(-2 * avg_deviation) # Weight: 30 points
-
-    # 2. Point coverage (0-15 points)
-    points_reached = 0
-    point_coverage_flags = []
-    for i, ideal_point_lat_lon in enumerate(heart_points): # heart_points are (lat, lon)
-        min_distance = float('inf')
-        for route_lon, route_lat in route_coords_lon_lat:
-            # Simple Euclidean distance (approximation, better to use haversine if needed)
-            dist = math.sqrt((ideal_point_lat_lon[0] - route_lat)**2 + (ideal_point_lat_lon[1] - route_lon)**2)
-            min_distance = min(min_distance, dist)
-
-        if min_distance < size * 0.10: # Slightly wider threshold (10% of heart size)
-            points_reached += 1
-            point_coverage_flags.append(1)
-        else:
-            point_coverage_flags.append(0)
-    coverage_score = 15 * (points_reached / len(heart_points)) # Weight: 15 points
-
-    # 3. Heart symmetry (0-15 points) - Using original logic, adjusted weight
-    symmetry_score = 0
-    # (Keep the original symmetry calculation logic here, just adjust the final scaling)
-    point_angles = []
-    center_lat = sum(p[0] for p in heart_points) / len(heart_points)
-    center_lon = sum(p[1] for p in heart_points) / len(heart_points)
-
-    for i, point_lat_lon in enumerate(heart_points):
-        if i < len(point_coverage_flags) and point_coverage_flags[i]:
-             # Use atan2(y, x) which is atan2(lon - center_lon, lat - center_lat)
-            angle = math.atan2(point_lat_lon[1] - center_lon, point_lat_lon[0] - center_lat)
-            point_angles.append(angle)
-
-    if len(point_angles) >= 5:
-        point_angles.sort()
-        angle_diffs = []
-        for i in range(len(point_angles)):
-            next_i = (i + 1) % len(point_angles)
-            diff = point_angles[next_i] - point_angles[i]
-            # Handle wrap-around using modulo arithmetic on angles
-            diff = (diff + math.pi) % (2 * math.pi) - math.pi # Result in [-pi, pi]
-            angle_diffs.append(abs(diff))
-
-        if angle_diffs:
-             mean_diff = sum(angle_diffs) / len(angle_diffs)
-             std_dev = math.sqrt(sum((d - mean_diff)**2 for d in angle_diffs) / len(angle_diffs))
-             max_allowed_std = math.pi / 5 # Allow ~36 degrees avg variance
-             symmetry_score = 15 * max(0, (1 - (std_dev / max_allowed_std))) # Weight: 15 points
-
-    # --- New Area and Shape (IoU) Score Components ---
-
-    route_polygon = None
-    ideal_heart_polygon = None
-    area_similarity = 0
-    iou_score = 0
+    # Ensure route is closed
+    if route_coords[0] != route_coords[-1]:
+        route_coords.append(route_coords[0])
 
     try:
-        # Ensure route is closed for polygon (add start point to end if not already)
-        if route_coords_lon_lat[0] != route_coords_lon_lat[-1]:
-            route_coords_lon_lat.append(route_coords_lon_lat[0])
+        # Convert to Shapely geometries
+        route_poly = Polygon(route_coords).buffer(0)
+        heart_poly = Polygon(heart_template_coords).buffer(0)
+        route_line = LineString(route_coords)
+        heart_line = LineString(heart_template_coords)
 
-        if len(route_coords_lon_lat) >= 3:
-             # Attempt to create polygon, buffer(0) can fix some invalid geometries
-            route_polygon = Polygon(route_coords_lon_lat).buffer(0)
-
-
-        # Ideal heart points need to be in (lon, lat) order for Shapely
-        ideal_heart_coords_lon_lat = [(p[1], p[0]) for p in heart_points]
-        if len(ideal_heart_coords_lon_lat) >= 3:
-            ideal_heart_polygon = Polygon(ideal_heart_coords_lon_lat).buffer(0)
-
-        # 4. Area Similarity (0-20 points)
-        if route_polygon and ideal_heart_polygon and route_polygon.is_valid and ideal_heart_polygon.is_valid and ideal_heart_polygon.area > 0:
-            route_area = route_polygon.area
-            ideal_area = ideal_heart_polygon.area
-            # Score based on ratio difference, penalizing large deviations
-            area_diff_ratio = abs(route_area - ideal_area) / ideal_area
-            area_similarity = max(0, 1 - area_diff_ratio) # Linear decay
-            area_score = 20 * area_similarity # Weight: 20 points
+        # IoU
+        if route_poly.is_valid and heart_poly.is_valid:
+            inter_area = route_poly.intersection(heart_poly).area
+            union_area = route_poly.union(heart_poly).area
+            iou = inter_area / union_area if union_area > 0 else 0
         else:
-             area_score = 0
+            iou = 0
 
-        # 5. Shape Similarity (IoU) (0-20 points)
-        if route_polygon and ideal_heart_polygon and route_polygon.is_valid and ideal_heart_polygon.is_valid:
-            intersection_area = route_polygon.intersection(ideal_heart_polygon).area
-            union_area = route_polygon.union(ideal_heart_polygon).area
-            if union_area > 0:
-                iou = intersection_area / union_area
-                iou_score = 20 * iou # Weight: 20 points
-            else:
-                iou_score = 0
+        # Hausdorff distance
+        h_dist = max(
+            directed_hausdorff(np.array(route_coords), np.array(heart_template_coords))[0],
+            directed_hausdorff(np.array(heart_template_coords), np.array(route_coords))[0]
+        )
+        norm_hausdorff = h_dist / (size * 111000)  # scale to degrees -> km
+
+        # Symmetry (overlap with mirror image)
+        minx, _, maxx, _ = route_poly.bounds
+        center_x = 0.5 * (minx + maxx)
+        mirrored = scale(route_poly, xfact=-1, yfact=1, origin=(center_x, 0))
+        if route_poly.area > 0:
+            symmetry = mirrored.intersection(route_poly).area / route_poly.area
         else:
-             iou_score = 0
+            symmetry = 0
+
+        # Normalize metrics to [0, 1]
+        S_iou = iou ** 2
+        S_haus = math.exp(-6 * norm_hausdorff)
+        S_sym = max(0, min(1, symmetry))
+
+        # Composite score
+        raw_score = S_iou * 0.5 + S_haus * 0.3 + S_sym * 0.2
+
+        # Hard penalty for critical failure
+        if S_iou < 0.3 or S_haus < 0.3 or S_sym < 0.5:
+            raw_score *= 0.1
+
+        return round(max(0, min(100, 100 * raw_score)), 1)
 
     except TopologicalError as e:
-        print(f"Shapely TopologicalError during scoring: {e}. Assigning 0 for area/IoU.")
-        area_score = 0
-        iou_score = 0
+        print(f"Geometry error: {e}")
+        return 0
     except Exception as e:
-        print(f"Error during Shapely polygon processing: {e}. Assigning 0 for area/IoU.")
-        area_score = 0
-        iou_score = 0
-
-
-    # --- Combine Scores (Total 100 points) ---
-    final_score = shape_score + coverage_score + symmetry_score + area_score + iou_score
-
-    # Optional: Apply penalty/cap for very poor IoU or low point coverage
-    if iou_score < 5 or points_reached < 4: # If IoU < 0.25 (scaled) or < 4 points reached
-        final_score = min(final_score, 50) # Cap score for fundamentally non-heart shapes
-
-    return round(final_score, 1)
+        print(f"Scoring error: {e}")
+        return 0
 
 # Visualize road snapping for debugging
 def visualize_road_snapping(G, ideal_points, snapped_nodes, output_file="road_snapping.html"):
@@ -489,9 +410,9 @@ def build_and_run_heart_matrix(city="San Francisco, California"):
     import time
     
     # Configuration parameters to try
-    latitude_offsets = [-0.01, 0, 0.01]
-    longitude_offsets = [-0.01, 0, 0.01]
-    sizes = [0.005, 0.01, 0.015]  # Different heart sizes to try
+    latitude_offsets = [-0.02, -0.01, 0, 0.01, 0.02]
+    longitude_offsets = [-0.02, -0.01, 0, 0.01, 0.02]
+    sizes = [0.005, 0.01, 0.015, 0.02]  # Different heart sizes to try
     results = []
 
     for north_offset in latitude_offsets:
@@ -593,7 +514,9 @@ def build_and_run_heart_matrix(city="San Francisco, California"):
                     continue
                 
                 # Score the route
-                score = calculate_heart_score(G, route_nodes, ideal_heart_segments, heart_points, snapped_heart_points, size)
+                ideal_heart_coords = [(lon, lat) for lat, lon in heart_points]
+
+                score = calculate_heart_score(G, route_nodes, ideal_heart_coords, size)
                 print(f"Route scored {score} points")
                 
                 results.append({
@@ -613,15 +536,13 @@ def build_and_run_heart_matrix(city="San Francisco, California"):
     
     print("\nRanking of heart routes by adherence to the ideal heart shape:")
     for rank, result in enumerate(results[:], 1):
-        print(f"Rank {rank}: north_offset={result['north_offset']}, "
-              f"east_offset={result['east_offset']}, size={result['size']}, score={result['score']:.1f}")
+        if result['score'] > 82.0:
         
-        out_file = f"heart_route_rank{rank}_{result['north_offset']}_{result['east_offset']}_{result['size']}.html"
-        plot_route(result["G"], result["route_nodes"], result["heart_points"], out_file=out_file)
-        print(f"Route map saved to {out_file}")
+            print(f"Rank {rank}: north_offset={result['north_offset']}, "
+              f"east_offset={result['east_offset']}, size={result['size']}, score={result['score']:.1f}")
 
-        gpx_file = f"heart_route_rank{rank}_{result['north_offset']}_{result['east_offset']}_{result['size']}.gpx"
-        save_route_gpx(result["G"], result["route_nodes"], out_file=gpx_file)
+            gpx_file = f"heart_route_rank{rank}_{result['north_offset']}_{result['east_offset']}_{result['size']}.gpx"
+            save_route_gpx(result["G"], result["route_nodes"], out_file=gpx_file)
     
     return results
 
