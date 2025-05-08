@@ -547,4 +547,4 @@ def build_and_run_heart_matrix(city="San Francisco, California"):
     return results
 
 if __name__ == "__main__":
-    build_and_run_heart_matrix()
+    build_and_run_heart_matrix("Hollywood, Florida")
